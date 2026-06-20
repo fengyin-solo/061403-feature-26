@@ -38,6 +38,8 @@
             :food="food"
             :hide="hide"
             :tools="tools"
+            :storageLimits="storageLimits"
+            :getEffectiveLimit="getEffectiveLimit"
           />
         </div>
 
@@ -122,6 +124,8 @@ const {
   isDanger,
   canMakeFire,
   huntSuccessRate,
+  storageLimits,
+  getEffectiveLimit,
   chopWood,
   hunt,
   makeTools,

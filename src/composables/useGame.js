@@ -19,6 +19,11 @@ export function useGame() {
   const HEAT_CONSUMPTION_RATE = 2
   const BLIZZARD_CHANCE = 0.15
 
+  const BASE_STORAGE_LIMITS = { wood: 30, food: 20, hide: 15, tools: 5 }
+  const BLIZZARD_STORAGE_PENALTY = 0.5
+
+  const storageLimits = ref({ ...BASE_STORAGE_LIMITS })
+
   let dayNightTimer = null
   let nightConsumptionTimer = null
   let autoSaveTimer = null
@@ -35,6 +40,46 @@ export function useGame() {
     if (actionLog.value.length > 20) {
       actionLog.value.pop()
     }
+  }
+
+  function getEffectiveLimit(resource) {
+    const base = storageLimits.value[resource]
+    if (isBlizzard.value) return Math.floor(base * BLIZZARD_STORAGE_PENALTY)
+    return base
+  }
+
+  function clampResource(resourceRef, resourceName) {
+    const limit = getEffectiveLimit(resourceName)
+    if (resourceRef.value > limit) {
+      const overflow = resourceRef.value - limit
+      resourceRef.value = limit
+      addLog(`⚠️ ${getResourceLabel(resourceName)}溢出！${overflow} 单位被丢弃`, 'warning')
+      return overflow
+    }
+    return 0
+  }
+
+  function addResource(resourceRef, resourceName, amount) {
+    const limit = getEffectiveLimit(resourceName)
+    const before = resourceRef.value
+    resourceRef.value = Math.min(before + amount, limit)
+    const actual = resourceRef.value - before
+    if (actual < amount) {
+      addLog(`📦 ${getResourceLabel(resourceName)}已达上限(${limit})，${amount - actual} 单位溢出丢弃`, 'warning')
+    }
+    return actual
+  }
+
+  function clampAllResources() {
+    clampResource(wood, 'wood')
+    clampResource(food, 'food')
+    clampResource(hide, 'hide')
+    clampResource(tools, 'tools')
+  }
+
+  function getResourceLabel(name) {
+    const labels = { wood: '木头', food: '食物', hide: '兽皮', tools: '工具' }
+    return labels[name] || name
   }
 
   function checkGameOver() {
@@ -83,10 +128,14 @@ export function useGame() {
   function startDayCycle() {
     dayCount.value++
     addLog(`天亮了，第 ${dayCount.value} 天开始`, 'success')
+    const wasBlizzard = isBlizzard.value
     isBlizzard.value = false
     if (nightConsumptionTimer) {
       clearInterval(nightConsumptionTimer)
       nightConsumptionTimer = null
+    }
+    if (wasBlizzard) {
+      addLog('暴风雪结束，仓储容量恢复正常', 'success')
     }
   }
 
@@ -101,7 +150,8 @@ export function useGame() {
 
   function triggerBlizzard() {
     isBlizzard.value = true
-    addLog('⚠️ 暴风雪来袭！所有消耗加倍！', 'danger')
+    addLog('⚠️ 暴风雪来袭！所有消耗加倍！仓储容量减半！', 'danger')
+    clampAllResources()
   }
 
   function chopWood() {
@@ -112,9 +162,9 @@ export function useGame() {
     
     temperature.value = Math.max(0, temperature.value - tempCost)
     const woodGained = Math.floor(Math.random() * 3) + 2
-    wood.value += woodGained
+    const actual = addResource(wood, 'wood', woodGained)
     
-    addLog(`砍柴：获得 ${woodGained} 木头，消耗 ${tempCost} 体温`, 'action')
+    addLog(`砍柴：获得 ${actual} 木头，消耗 ${tempCost} 体温`, 'action')
     
     if (Math.random() < BLIZZARD_CHANCE * 0.5) {
       triggerBlizzard()
@@ -134,9 +184,9 @@ export function useGame() {
     if (Math.random() < huntSuccessRate.value) {
       const foodGained = Math.floor(Math.random() * 3) + 2
       const hideGained = Math.floor(Math.random() * 2) + 1
-      food.value += foodGained
-      hide.value += hideGained
-      addLog(`狩猎成功：获得 ${foodGained} 食物，${hideGained} 兽皮，消耗 ${tempCost} 体温`, 'success')
+      const actualFood = addResource(food, 'food', foodGained)
+      const actualHide = addResource(hide, 'hide', hideGained)
+      addLog(`狩猎成功：获得 ${actualFood} 食物，${actualHide} 兽皮，消耗 ${tempCost} 体温`, 'success')
     } else {
       addLog(`狩猎失败：消耗 ${tempCost} 体温，空手而归`, 'warning')
     }
@@ -160,10 +210,14 @@ export function useGame() {
     
     wood.value -= 2
     hide.value -= 1
-    tools.value += 1
+    const actual = addResource(tools, 'tools', 1)
     temperature.value = Math.max(0, temperature.value - tempCost)
     
-    addLog(`制作工具：获得 1 工具，消耗 ${tempCost} 体温`, 'success')
+    if (actual > 0) {
+      addLog(`制作工具：获得 ${actual} 工具，消耗 ${tempCost} 体温`, 'success')
+    } else {
+      addLog(`制作工具失败：工具已达上限，材料已消耗`, 'warning')
+    }
     checkGameOver()
   }
 
@@ -230,6 +284,7 @@ export function useGame() {
       isDay: isDay.value,
       dayCount: dayCount.value,
       isBlizzard: isBlizzard.value,
+      storageLimits: { ...storageLimits.value },
       savedAt: Date.now()
     }
     localStorage.setItem(`snowSurvival_${slot}`, JSON.stringify(gameState))
@@ -254,9 +309,14 @@ export function useGame() {
       isDay.value = gameState.isDay
       dayCount.value = gameState.dayCount
       isBlizzard.value = gameState.isBlizzard
+      storageLimits.value = gameState.storageLimits 
+        ? { ...BASE_STORAGE_LIMITS, ...gameState.storageLimits } 
+        : { ...BASE_STORAGE_LIMITS }
       gameOver.value = false
       gameOverReason.value = ''
       actionLog.value = []
+      
+      clampAllResources()
       
       stopTimers()
       startTimers()
@@ -307,6 +367,7 @@ export function useGame() {
     isDay.value = true
     dayCount.value = 1
     isBlizzard.value = false
+    storageLimits.value = { ...BASE_STORAGE_LIMITS }
     gameOver.value = false
     gameOverReason.value = ''
     actionLog.value = []
@@ -344,6 +405,8 @@ export function useGame() {
     canMakeFire,
     canHunt,
     huntSuccessRate,
+    storageLimits,
+    getEffectiveLimit,
     chopWood,
     hunt,
     makeTools,
